@@ -27,30 +27,7 @@ def _cache_key(namespace, value):
     return f"locator:{namespace}:v1:{digest}"
 
 
-# why redundancy?
-# geocode_city() is doing the same thing?
-# def geocode_city(city, state):
-#     # check this params and timout parameter let me check it
-#     response = requests.get(
-#         GEOCODING_URL,
-#         params={"name": f"{city}, {state}", "count": 10, "language": "en", "format": "json"},
-#         timeout=10,
-#     )
-#     # what does raise for status do?
-#     # do i need anything beside latitude and longitude?
-#     # but as of now the logic seems good only implementation problem if any?
-#     response.raise_for_status()
-#     results = response.json().get("results", [])
-#     match = next((result for result in results if result.get("country_code") == "US"), None)
-#     if not match:
-#         return None
-#     return match["latitude"], match["longitude"]
-
-# ! the only difference is that isn't city,state we are sending query?
-# ! okay this seems redundancy then a side case
-#LGTM
 def geocode_location(query):
-    # storing a cacke key and its key is this
     cache_key = _cache_key("geocode", query.strip().casefold())
     cached_coordinates = cache.get(cache_key)
     if cached_coordinates is not None:
@@ -67,15 +44,10 @@ def geocode_location(query):
     if not match:
         raise RoutePlanningError(f"Could not find a US location for '{query}'.")
     coordinates = (match["latitude"], match["longitude"])
-    # Geocoded coordinates are stable, so reuse them instead of repeating external lookups.
     cache.set(cache_key, coordinates, timeout=GEOCODE_CACHE_SECONDS)
     return coordinates
 
 
-# * so we are using the osrm routing public api
-# * return the [all the points making up that route][distance in miles thats why 1609.344]
-# * LGTM
-# so this is returning the distance of the patth the road from start to finish
 def get_route(start, finish):
     route_key = f"{start[0]},{start[1]}:{finish[0]},{finish[1]}"
     cache_key = _cache_key("route", route_key)
@@ -86,7 +58,6 @@ def get_route(start, finish):
     url = f"{ROUTING_URL}/{start[1]},{start[0]};{finish[1]},{finish[0]}"
     response = requests.get(
         url,
-        # A compact path keeps station projection fast while OSRM retains the full route distance.
         params={"overview": "simplified", "geometries": "geojson", "steps": "false"},
         timeout=20,
     )
@@ -94,30 +65,19 @@ def get_route(start, finish):
     payload = response.json()
     if payload.get("code") != "Ok" or not payload.get("routes"):
         raise RoutePlanningError("The routing service could not find a drivable route.")
-    # what is in payload response .json()
-    # why we are dividing it by 1609.344?
-    # TODO i have to confirm that this return is correct
     route = payload["routes"][0]
     result = route["geometry"]["coordinates"], route["distance"] / 1609.344
-    # Cache route geometry, but rebuild the fuel plan each time from current station prices.
     cache.set(cache_key, result, timeout=ROUTE_CACHE_SECONDS)
     return result
 
 
-# * LGTM
-# and this is returnign the displacement from the start to finish why
-# ? why? though? the code is right but why we need it ?
 def _distance_miles(first, second):
-    # so we are convertin latitude and longitude from degree to radian why?
-    # lets see...
     lat1, lon1 = math.radians(first[1]), math.radians(first[0])
     lat2, lon2 = math.radians(second[1]), math.radians(second[0])
     delta_lat = lat2 - lat1
     delta_lon = lon2 - lon1
     EARTH_RADIUS = 3958.7613
 
-    # ? are we making a triangle?
-    # so we are using haversine formula? okay...
     haversine = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
     haversine = min(1.0, max(0.0, haversine))
     c = 2*math.atan2(math.sqrt(haversine), math.sqrt(1-haversine))
@@ -130,7 +90,6 @@ def _project_to_route(point, coordinates, cumulative_miles):
     closest_distance = float("inf")
     closest_route_mile = 0.0
 
-    # iterating through each and every drivable coordinates
     for index, (first, second) in enumerate(zip(coordinates, coordinates[1:])):
         reference_lat = math.radians((first[1] + second[1] + point[1]) / 3)
         scale_x = math.cos(reference_lat)
@@ -151,26 +110,15 @@ def _project_to_route(point, coordinates, cumulative_miles):
 
 
 def plan_fuel_stops(coordinates, route_miles, station_rows):
-    # good fallback
     if not coordinates or route_miles <= 0:
         raise RoutePlanningError("The routing service returned an invalid route.")
 
     cumulative_miles = [0.0]
-    # ? zip? i guess we are iterating from the second coordinate to the last with each iteration
-    # * with lat and long
-    # ? ant then appending it is cum_miles?
-    # ? why what will it accomplish?
-    # * so it is just a prefix sum of distance of every point in the route
     for first, second in zip(coordinates, coordinates[1:]):
         cumulative_miles.append(cumulative_miles[-1] + _distance_miles(first, second))
     geometry_miles = cumulative_miles[-1]
     if geometry_miles == 0:
         raise RoutePlanningError("The routing service returned an invalid route geometry.")
-    # * now we are updating it...
-    # route miles is the total drivable distance
-    # mile is just iterating though cumulative miles
-    # and geometry miles is last value 
-    # ? i don't get the math of this or his approach what does it accomplish
     cumulative_miles = [mile * route_miles / geometry_miles for mile in cumulative_miles]
 
     candidates = []
@@ -275,24 +223,19 @@ def plan_fuel_stops(coordinates, route_miles, station_rows):
 
 
 def build_route_plan(start_query, finish_query):
-    # These independent lookups run together to avoid serial network latency on a cache miss.
     with ThreadPoolExecutor(max_workers=2) as executor:
         start_future = executor.submit(geocode_location, start_query)
         finish_future = executor.submit(geocode_location, finish_query)
         start = start_future.result()
         finish = finish_future.result()
-    # then we get the shortest path okay
     coordinates, route_miles = get_route(start, finish)
-    # we create a list storing all the lattides and logitude of fuel statison which are not null
     stations = list(
         FuelStop.objects.filter(latitude__isnull=False, longitude__isnull=False)
         .values("opis_id", "name", "address", "city", "state", "latitude", "longitude", "price_per_gallon")
     )
-    # good fallback
     if not stations:
         raise RoutePlanningError("No geocoded fuel stops are available. Run the fuel-stop import with --geocode first.")
 
-    # ! plan_fuel_stops lets understand this function later first check where we are need that hypervise func?
     stops, fuel_cost = plan_fuel_stops(coordinates, route_miles, stations)
     return {
         "start": {"query": start_query, "latitude": start[0], "longitude": start[1]},
