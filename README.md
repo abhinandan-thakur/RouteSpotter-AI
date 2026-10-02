@@ -101,4 +101,3 @@ python manage.py test locator
 Loom video:
 
 https://www.loom.com/share/79e2489eb2bf4e8b895077a5fcd3035f
-```
