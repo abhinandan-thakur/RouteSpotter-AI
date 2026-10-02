@@ -55,3 +55,6 @@
 
 # ! I havent' reviewed services.py and tests.py and import_fuel_stops.py lets rememebrt htat 
 # ! it is important
+
+
+# ! FOR OPTIMIZATION CACHE TLS IS OF 24 Hrs

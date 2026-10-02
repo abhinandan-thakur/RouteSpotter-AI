@@ -15,13 +15,13 @@ MAX_RANGE_MILES = 500
 MILES_PER_GALLON = 10
 MAX_DETOUR_MILES = 20
 GEOCODE_CACHE_SECONDS = 24 * 60 * 60
-ROUTE_CACHE_SECONDS = 15 * 60
+ROUTE_CACHE_SECONDS = 60*60
 
 
 class RoutePlanningError(Exception):
     pass
 
-
+#imtersting storing cache key in sha256?
 def _cache_key(namespace, value):
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
     return f"locator:{namespace}:v1:{digest}"
@@ -48,8 +48,9 @@ def _cache_key(namespace, value):
 
 # ! the only difference is that isn't city,state we are sending query?
 # ! okay this seems redundancy then a side case
-
+#LGTM
 def geocode_location(query):
+    # storing a cacke key and its key is this
     cache_key = _cache_key("geocode", query.strip().casefold())
     cached_coordinates = cache.get(cache_key)
     if cached_coordinates is not None:

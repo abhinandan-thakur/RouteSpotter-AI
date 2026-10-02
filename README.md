@@ -1,3 +1,5 @@
+Loom vio = https://www.loom.com/share/79e2489eb2bf4e8b895077a5fcd3035f
+
 # Fuel Route Planner
 
 Django API for driving routes with fuel stops chosen from the assessment CSV. Route geometry comes from the public OSRM demo server; start and finish locations are resolved with Open-Meteo.
